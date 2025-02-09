@@ -234,6 +234,11 @@ class MiniCPMLongRoPE(MiniCPMRotaryEmbedding):
             torch.outer(t, 1.0 / ext_factors).to(device=device),
             self.inv_freq.to(device=device).to(dtype)
         )
+        
+        # freqs = torch.outer(t, self.inv_freq)
+        # # Different from paper, but it uses a different permutation in order to obtain the same calculation
+        # emb = torch.cat((freqs, freqs), dim=-1)
+
         # Different from paper, but it uses a different permutation in order to obtain the same calculation
         emb = torch.cat((freqs, freqs), dim=-1)
         self.register_buffer("cos_cached", emb.cos().to(dtype) * self.scaling_factor, persistent=False)
