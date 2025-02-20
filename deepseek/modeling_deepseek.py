@@ -811,18 +811,25 @@ class DeepseekV2Attention(nn.Module):
                 "Passing `padding_mask` is deprecated and will be removed in v4.37. Please make sure use `attention_mask` instead.`"
             )
         bsz, q_len, _ = hidden_states.size()
-
+        # q[ bsz,nt ,nh * dk]
         q = self.q_b_proj(self.q_a_layernorm(self.q_a_proj(hidden_states)))
+        #[bsz,nh,nt,dk]
         q = q.view(bsz, q_len, self.num_heads, self.q_head_dim).transpose(1, 2)
+        # q_nope [bsz,nh,nt,nope]
+        # q_pe [bsz,nh,nt,rope]
         q_nope, q_pe = torch.split(
             q, [self.qk_nope_head_dim, self.qk_rope_head_dim], dim=-1
         )
-
+        # compressed_kv [bsz,nt,dkv_lora + dh]
         compressed_kv = self.kv_a_proj_with_mqa(hidden_states)
+        # compressed_kv [bsz,nt,dkv_lora]
+        # k_pe [bsz,nt,dh]
         compressed_kv, k_pe = torch.split(
             compressed_kv, [self.kv_lora_rank, self.qk_rope_head_dim], dim=-1
         )
+        # compressed_kv  [bsz,nt,dkv_lora]
         compressed_kv = self.kv_a_layernorm(compressed_kv)
+        # k_pe [bsz, 1, nt, rope]
         k_pe = k_pe.view(bsz, q_len, 1, self.qk_rope_head_dim).transpose(1, 2)
 
         kv_seq_len = k_pe.shape[-2]
@@ -843,12 +850,17 @@ class DeepseekV2Attention(nn.Module):
             compressed_kv = compressed_kv.unsqueeze(1)
             k_pe, compressed_kv = past_key_value.update(k_pe, compressed_kv, self.layer_idx, cache_kwargs)
             compressed_kv = compressed_kv.squeeze(1)
-        
+        #  kv_b_proj [nh, dk, kv_lora]
         kv_b_proj = self.kv_b_proj.weight.view(self.num_heads, -1, self.kv_lora_rank)
+        # q_absorb [nh, nope, kv_lora]
         q_absorb = kv_b_proj[:, :self.qk_nope_head_dim,:]
+        # q_out_absorb [nh, rope, kv_lora]
         out_absorb = kv_b_proj[:, self.qk_nope_head_dim:, :]
-
+        # q_nope [bsz,nh,nt, dkv_lora]
         q_nope = torch.matmul(q_nope, q_absorb)
+        #  q_pe*k_pe.mt  [bsz,nh,nt,nt]
+        # q_nope*compressed_kv.unsqueeze(-3).mT [bsz,nh,nt,nt]
+        # attn_weights  [bsz,nh,nt,nt]
         attn_weights = (torch.matmul(q_pe, k_pe.mT) + torch.matmul(q_nope, compressed_kv.unsqueeze(-3).mT)) * self.softmax_scale
         if attn_weights.size() != (bsz, self.num_heads, q_len, kv_seq_len):
             raise ValueError(
@@ -870,6 +882,7 @@ class DeepseekV2Attention(nn.Module):
         attn_weights = nn.functional.dropout(
             attn_weights, p=self.attention_dropout, training=self.training
         )
+        # attn_weights  [bsz,nh,nt,nt]  compressed_kv  [bsz,nt,dkv_lora]
         attn_output = torch.einsum('bhql,blc->bhqc', attn_weights, compressed_kv)
 
         attn_output = torch.matmul(attn_output, out_absorb.mT) 
