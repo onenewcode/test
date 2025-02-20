@@ -854,7 +854,7 @@ class DeepseekV2Attention(nn.Module):
         kv_b_proj = self.kv_b_proj.weight.view(self.num_heads, -1, self.kv_lora_rank)
         # q_absorb [nh, nope, kv_lora]
         q_absorb = kv_b_proj[:, :self.qk_nope_head_dim,:]
-        # q_out_absorb [nh, rope, kv_lora]
+        # out_absorb [nh, dv, kv_lora]
         out_absorb = kv_b_proj[:, self.qk_nope_head_dim:, :]
         # q_nope [bsz,nh,nt, dkv_lora]
         q_nope = torch.matmul(q_nope, q_absorb)
@@ -883,8 +883,9 @@ class DeepseekV2Attention(nn.Module):
             attn_weights, p=self.attention_dropout, training=self.training
         )
         # attn_weights  [bsz,nh,nt,nt]  compressed_kv  [bsz,nt,dkv_lora]
+        #  attn_output  [bsz,nh,nt,dkv_lora]
         attn_output = torch.einsum('bhql,blc->bhqc', attn_weights, compressed_kv)
-
+        #  attn_output  [bsz,nh,nt,dv]
         attn_output = torch.matmul(attn_output, out_absorb.mT) 
 
         if attn_output.size() != (bsz, self.num_heads, q_len, self.v_head_dim):
