@@ -844,7 +844,9 @@ class DeepseekV2Attention(nn.Module):
 
         cos, sin = self.rotary_emb(q_pe, seq_len=kv_seq_len)
         q_pe, k_pe = apply_rotary_pos_emb(q_pe, k_pe, cos, sin, position_ids)
-
+        #  使用缓存
+        # k_pe [bsz, 1, attn, rope]
+        # compressed_kv [bsz,attn,dkv_lora]
         if past_key_value is not None:
             cache_kwargs = {"sin": sin, "cos": cos}  # Specific to RoPE models
             compressed_kv = compressed_kv.unsqueeze(1)
@@ -858,9 +860,9 @@ class DeepseekV2Attention(nn.Module):
         out_absorb = kv_b_proj[:, self.qk_nope_head_dim:, :]
         # q_nope [bsz,nh,nt, dkv_lora]
         q_nope = torch.matmul(q_nope, q_absorb)
-        #  q_pe*k_pe.mt  [bsz,nh,nt,nt]
-        # q_nope*compressed_kv.unsqueeze(-3).mT [bsz,nh,nt,nt]
-        # attn_weights  [bsz,nh,nt,nt]
+        #  q_pe*k_pe.mt  [bsz,nh,nt,attn]
+        # q_nope*compressed_kv.unsqueeze(-3).mT [bsz,nh,nt,attn]
+        # attn_weights  [bsz,nh,nt,attn]
         attn_weights = (torch.matmul(q_pe, k_pe.mT) + torch.matmul(q_nope, compressed_kv.unsqueeze(-3).mT)) * self.softmax_scale
         if attn_weights.size() != (bsz, self.num_heads, q_len, kv_seq_len):
             raise ValueError(
@@ -882,7 +884,7 @@ class DeepseekV2Attention(nn.Module):
         attn_weights = nn.functional.dropout(
             attn_weights, p=self.attention_dropout, training=self.training
         )
-        # attn_weights  [bsz,nh,nt,nt]  compressed_kv  [bsz,nt,dkv_lora]
+        # attn_weights  [bsz,nh,nt,attn]  compressed_kv  [bsz,attn,dkv_lora]
         #  attn_output  [bsz,nh,nt,dkv_lora]
         attn_output = torch.einsum('bhql,blc->bhqc', attn_weights, compressed_kv)
         #  attn_output  [bsz,nh,nt,dv]
